@@ -1,4 +1,3 @@
-import streamlit as st
 import pandas as pd
 from PyPDF2 import PdfReader
 import re
@@ -6,72 +5,70 @@ import pytesseract
 from PIL import Image
 import pdf2image
 import math
-import cv2
-import numpy as np
-import tempfile
+import streamlit as st
 
-# Set the path to Tesseract OCR executable
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# Function to extract text from PDF using PyPDF2 (for text-based PDFs)
+# Function to extract text from PDF
 def extract_text_from_pdf(pdf_path):
     reader = PdfReader(pdf_path)
     full_text = ""
     for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            full_text += text + "\n"
+        full_text += page.extract_text() + "\n"
     return full_text
 
-# Function to preprocess the image for better OCR
-def preprocess_image(image):
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh_image = cv2.threshold(gray_image, 150, 255, cv2.THRESH_BINARY)
-    return thresh_image
-
-# Function to convert PDF to images and use OCR to extract text
+# Function to convert PDF to image and use OCR to extract text
 def extract_text_using_ocr(pdf_path):
-    images = pdf2image.convert_from_path(pdf_path, dpi=300)
+    images = pdf2image.convert_from_path(pdf_path)
     full_text = ""
-    for img in images:
-        open_cv_image = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        processed_image = preprocess_image(open_cv_image)
-        text = pytesseract.image_to_string(processed_image)
+    for image in images:
+        text = pytesseract.image_to_string(image)
         full_text += text + "\n"
     return full_text
 
 # General function to extract data from text using regex
 def extract_data_from_text(text):
     data = []
+    
+    # Regex pattern to handle roll numbers starting with '0801', names, and decimal marks/status
     pattern = re.compile(r"(0801[A-Z\d]*[A-Z]?)\s+([A-Za-z\s]+?)\s+(\d+(\.\d+)?|A|None|Absent)", re.IGNORECASE)
     matches = pattern.findall(text)
     
     for match in matches:
         enrollment_no = match[0].strip()
         name = match[1].strip()
-        marks_or_status = match[2].strip() if match[2] else "None"
+        marks_or_status = match[2].strip() if match[2] else "None"  # Handle missing marks
         
+        if 'D' in enrollment_no.upper():  # Special handling for cases with 'D'
+            print(f"Enrollment Number with D: {enrollment_no}, Name: {name}, Marks/Status: {marks_or_status}")
+
         if marks_or_status.replace('.', '', 1).isdigit():
-            marks = math.ceil(float(marks_or_status))
+            marks = math.ceil(float(marks_or_status))  # Use math.ceil() to round up
             status = "Present"
         elif marks_or_status.lower() in ["a", "absent", "none"]:
             marks = None
             status = "Absent"
         else:
             marks = None
-            status = "Unknown"
+            status = "Unknown"  # Handle unknown statuses
         
         data.append((enrollment_no, name, marks, status))
     
     return data
 
-# Function to process the data into categories
+# Function to process the data
 def process_data(data):
     df = pd.DataFrame(data, columns=['Enrollment No', 'Name', 'Marks', 'Status'])
+    
+    # Drop rows where 'Enrollment No' or 'Name' is missing
     df.dropna(subset=['Enrollment No', 'Name'], inplace=True)
     
+    # Debugging: Print out DataFrame for inspection
+    print("DataFrame:\n", df.head(10))  # Print first 10 rows for inspection
+    
+    # Handling 'Present' status
     df.loc[(df['Marks'].notnull()) & (df['Marks'] >= 7), 'Status'] = 'Pass'
     df.loc[(df['Marks'].notnull()) & (df['Marks'] < 7), 'Status'] = 'Fail'
+    
+    # Update status for 'Absent'
     df['Status'] = df['Status'].fillna('Absent')
     
     passed = df[df['Status'] == 'Pass']
@@ -80,73 +77,70 @@ def process_data(data):
     
     return passed, failed, absent
 
-# Function to generate Excel sheets for passed, failed, and absent students
+# Function to generate Excel sheets
 def generate_excel(passed, failed, absent):
-    # Create a named temporary file to hold the Excel file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    temp_file.close()  # Close the file so Pandas can write to it
-
-    with pd.ExcelWriter(temp_file.name, engine='openpyxl') as writer:
+    output = "student_marks.xlsx"  # Specify the filename
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         if not passed.empty:
             passed.to_excel(writer, sheet_name="Passed Students", index=False)
         if not failed.empty:
             failed.to_excel(writer, sheet_name="Failed Students", index=False)
         if not absent.empty:
             absent.to_excel(writer, sheet_name="Absent Students", index=False)
+    return output
 
-    return temp_file.name  # Return the path to the Excel file
-
-# Streamlit App
+# Main Streamlit application
 def main():
-    st.title("Student Marks Categorization App")
-    
-    uploaded_file = st.file_uploader("Upload a PDF or Image file", type=["pdf", "jpg", "jpeg", "png"])
-    
-    if uploaded_file:
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name.split('.')[-1]) as temp_file:
-            temp_file.write(uploaded_file.getbuffer())
-            file_path = temp_file.name
+    st.title("Student Marks Extraction from PDF")
 
-        st.write("Processing the file...")
+    # File uploader for PDF files
+    pdf_file = st.file_uploader("Upload a PDF file containing student marks", type=["pdf"])
 
-        # Try to extract text from the PDF or image
-        if uploaded_file.name.endswith(".pdf"):
-            text = extract_text_from_pdf(file_path)
-            if not text.strip():
-                st.write("No text extracted using PyPDF2, attempting OCR...")
-                text = extract_text_using_ocr(file_path)
-        else:
-            image = Image.open(uploaded_file)
-            text = pytesseract.image_to_string(image)
+    if pdf_file:
+        with open("uploaded_file.pdf", "wb") as f:
+            f.write(pdf_file.getbuffer())
 
+        # Attempt to extract text from the PDF
+        text = extract_text_from_pdf("uploaded_file.pdf")
+        
+        # If no text is extracted, try using OCR
         if not text.strip():
-            st.error("No data extracted. Please check the file format.")
+            st.warning("No text extracted from PDF, attempting OCR...")
+            text = extract_text_using_ocr("uploaded_file.pdf")
+        
+        if not text.strip():
+            st.error("No data extracted. Please check the PDF format.")
             return
-
+        
+        # Extract data using regex
         data = extract_data_from_text(text)
+        
+        # Print extracted data for debugging
+        st.write("Extracted Data:", data)
+
         passed, failed, absent = process_data(data)
+        
+        # Print DataFrames for debugging
+        st.subheader("Passed Students")
+        st.write(passed)
 
-        # Displaying summary of results
-        st.write(f"Total Students: {len(data)}")
-        st.write(f"Passed: {len(passed)}")
-        st.write(f"Failed: {len(failed)}")
-        st.write(f"Absent: {len(absent)}")
+        st.subheader("Failed Students")
+        st.write(failed)
 
-        # Offer option to download categorized Excel sheet
-        if st.button("Generate Excel"):
-            try:
-                output_path = generate_excel(passed, failed, absent)
-                with open(output_path, "rb") as f:
-                    st.download_button(
-                        label="Download Excel File",
-                        data=f,
-                        file_name="Students_Categorized.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                st.success("Excel file created successfully.")
-            except Exception as e:
-                st.error(f"Error generating Excel file: {e}")
+        st.subheader("Absent Students")
+        st.write(absent)
+
+        # Count and print the number of students in each category
+        total_students = len(pd.concat([passed, failed, absent], ignore_index=True))
+        st.write(f"Total number of students: {total_students}")
+        st.write(f"Number of students who passed: {len(passed)}")
+        st.write(f"Number of students who failed: {len(failed)}")
+        st.write(f"Number of students who were absent: {len(absent)}")
+
+        # Generate Excel file and provide download link
+        excel_file = generate_excel(passed, failed, absent)
+        with open(excel_file, "rb") as f:
+            st.download_button("Download Excel file", f, file_name="student_marks.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 if __name__ == "__main__":
     main()
