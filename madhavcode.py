@@ -64,9 +64,9 @@ def process_data(data):
     # Debugging: Print out DataFrame for inspection
     print("DataFrame:\n", df.head(10))  # Print first 10 rows for inspection
     
-    # Handling 'Present' status
-    df.loc[(df['Marks'].notnull()) & (df['Marks'] >= 7), 'Status'] = 'Pass'
-    df.loc[(df['Marks'].notnull()) & (df['Marks'] < 7), 'Status'] = 'Fail'
+    # Handling 'Present' status based on the new criteria
+    df.loc[(df['Marks'].notnull()) & (df['Marks'] >= 22), 'Status'] = 'Pass'
+    df.loc[(df['Marks'].notnull()) & (df['Marks'] < 22), 'Status'] = 'Fail'
     
     # Update status for 'Absent'
     df['Status'] = df['Status'].fillna('Absent')
